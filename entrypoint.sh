@@ -120,8 +120,9 @@ if [ -n "$CF_TUNNEL_TOKEN" ]; then
     echo "[*] Menjalankan Cloudflare Named Tunnel..."
     cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" > $LOG_CF 2>&1 &
 else
-    echo "[*] Menjalankan Cloudflare Quick Tunnel (URL Acak .trycloudflare.com)..."
-    cloudflared tunnel --url "http://127.0.0.1:$PUBLIC_PORT" --protocol http2 > $LOG_CF 2>&1 &
+    echo "[*] Menjalankan Cloudflare Quick Tunnel Langsung ke WS-Proxy (Port 8880)..."
+    # FIXED: Diarahkan langsung ke $WS_INTERNAL_PORT agar Dark Tunnel gak kena Bad Request
+    cloudflared tunnel --url "http://127.0.0.1:$WS_INTERNAL_PORT" --protocol http2 > $LOG_CF 2>&1 &
 fi
 
 # --- TAMBAHAN UTAMA: BADVPN UDPGW UNTUK MENDUKUNG TRAFIK UDP / GAME ---
@@ -156,11 +157,10 @@ ws-proxy &
         [ -z "$UPTIME" ] && UPTIME=$(uptime | awk '{print $3}')
         
         # Hitung Online Users di SSH (Port 22) via netstat/ss
-        # Menghitung koneksi ESTABLISHED ke port lokal 22
         SSH_ONLINE=$(netstat -anp 2>/dev/null | grep :22 | grep ESTABLISHED | wc -l)
         [ -z "$SSH_ONLINE" ] && SSH_ONLINE="0"
 
-        # Simpan ke format JSON mentah agar dibaca python dengan instan
+        # Simpan ke format JSON mentah
         cat <<EOF > "$STATS_JSON"
 {
   "cpu_model": "$CPU_MODEL ($CPU_CORES Cores)",
