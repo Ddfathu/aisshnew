@@ -8,6 +8,7 @@ import urllib.parse
 
 PORT = 8081
 LOG_PATH = "/tmp/cloudflared.log"
+NAMED_LOG_PATH = "/tmp/named_tunnel.log" # Path log Named Tunnel rahasia yang baru kita buat
 STATS_PATH = "/tmp/server_stats.json"
 DB_PATH = "/tmp/ssh_details.json"  # Database rahasia penyimpan IP, Pass, dan UA
 
@@ -147,6 +148,26 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         # Tangkap IP asli (jika lewat Cloudflare ambil CF-Connecting-IP, kalau lokal ambil client_address)
         ip_addr = self.headers.get("CF-Connecting-IP", self.client_address[0])
         user_agent = self.headers.get("User-Agent", "Unknown UA")
+
+        # 🟢 ROUTER BARU: API UNTUK PANTAU LOG ARGO NAMED TUNNEL SECARA LIVE
+        if path == "/api/logtunnel":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            if os.path.exists(NAMED_LOG_PATH):
+                try:
+                    with open(NAMED_LOG_PATH, "r") as f:
+                        # Ambil 70 baris terakhir biar log-nya padat dan informatif
+                        lines = f.readlines()
+                        last_lines = "".join(lines[-70:])
+                        self.wfile.write(last_lines.encode('utf-8'))
+                except Exception as e:
+                    self.wfile.write(f"Gagal membaca file log internal: {str(e)}".encode('utf-8'))
+            else:
+                self.wfile.write("File log /tmp/named_tunnel.log belum terbentuk di server, Bos! Pastikan token di env Railway sudah terisi dengan benar.".encode('utf-8'))
+            return
 
         # 🟢 ROUTER: ADD SSH (PUBLIK, TAPI SEKARANG MENANGKAP IP & UA)
         if path == "/api/add":
