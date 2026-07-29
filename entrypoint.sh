@@ -175,8 +175,14 @@ EOF
     done
 ) &
 
+# --- 🛠️ FIX LOGIKA YANG HILANG: SIAPKAN FOLDER & JALANKAN WEB UI DASHBOARD ---
+echo "[*] Menyiapkan lingkungan Web UI..."
+mkdir -p /app
+
 echo "[*] Memulai Web UI Dashboard di Port $UI_PORT..."
 python3 /app/index.py &
+
+# =================================================================
 
 echo "[*] Memulai Front Muxer Engine Utama (Golang Mode)..."
 export PORT="$PUBLIC_PORT"
@@ -185,4 +191,5 @@ export SSL_TARGET_PORT="$SSL_INTERNAL_PORT"
 export WS_MUX_TARGET_HOST="127.0.0.1"
 export WS_MUX_TARGET_PORT="$WS_INTERNAL_PORT"
 
+# FIXED: Menghapus typo tanda '>' agar mux berjalan lancar
 exec mux
