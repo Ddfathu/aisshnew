@@ -32,7 +32,7 @@ func main() {
 	}
 
 	// 🛠️ JALUR KUNCI BARU: Ambil konfigurasi port BadVPN UDPGW dari entrypoint.sh
-	udpgwHost := os.getenv("UDPGW_TARGET_HOST")
+	udpgwHost := os.Getenv("UDPGW_TARGET_HOST")
 	udpgwPort := os.Getenv("UDPGW_TARGET_PORT")
 	if udpgwHost == "" {
 		udpgwHost = "127.0.0.1"
@@ -101,19 +101,20 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 		targetAddr = "127.0.0.1:22"
 		label = "Raw OpenSSH (Port 22)"
 	} else {
-		// 🛠️ TAMPILAN JUMPER WEB UI & API PANEL
-		// Intip sisa buffer yang terbaca secara live untuk mendeteksi rute path spesifik
+		// 🛠️ SMART INTELLIGENT ROUTER UNTUK BROWSER & PAYLOAD
 		bufferedBytes, peekErr := reader.Peek(reader.Buffered())
-		if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("GET /ddfathupanel")) || bytes.Contains(bufferedBytes, []byte("GET /api/"))) {
-			// Belokkan request browser admin langsung ke port Web server Python internal
+		
+		// Cek apakah request HTTP membawa header domain kustom lu ATAU menembak API log
+		if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("dfathu.web.id")) || bytes.Contains(bufferedBytes, []byte("GET /api/"))) {
+			// Belokkan request browser biasa langsung ke port Web server Python internal port 8081
 			targetAddr = "127.0.0.1:8081"
-			label = "Web UI Python (Path Jumper)"
+			label = "Web UI Python (Argo Host Route)"
 		} else if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("7300")) || bytes.Contains(bufferedBytes, []byte("badvpn")) || bytes.Contains(bufferedBytes, []byte("UDPGW"))) {
 			// 🛠️ SMART DETECTOR UNTUK GAME / UDPGW
 			targetAddr = udpgwTarget
 			label = "BadVPN-UDPGW (Game Mode)"
 		} else {
-			// Payload DarkTunnel / HTTP Custom (GET / polos) otomatis aman lolos ke sini!
+			// Payload DarkTunnel / HTTP Custom (GET / polos tanpa domain kustom) otomatis aman lolos ke sini!
 			targetAddr = wsTarget
 			label = "WS-Proxy"
 		}
