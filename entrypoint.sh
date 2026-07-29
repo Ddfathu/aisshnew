@@ -115,15 +115,19 @@ echo "source /etc/bash.bashrc" >> /home/"$USER_NAME"/.bashrc
 echo "[*] Memulai Stunnel..."
 stunnel /etc/stunnel/stunnel.conf &
 
-# --- Argo Tunnel (cloudflared) ---
+# --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL 🔥 ---
+
+# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
-    echo "[*] Menjalankan Cloudflare Named Tunnel..."
-    cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" > $LOG_CF 2>&1 &
-else
-    echo "[*] Menjalankan Cloudflare Quick Tunnel Langsung ke WS-Proxy (Port 8880)..."
-    # FIXED: Diarahkan langsung ke $WS_INTERNAL_PORT agar Dark Tunnel gak kena Bad Request
-    cloudflared tunnel --url "http://127.0.0.1:$WS_INTERNAL_PORT" --protocol http2 > $LOG_CF 2>&1 &
+    echo "[*] Menjalankan Cloudflare Named Tunnel (Domain Custom Lu)..."
+    cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" &
 fi
+
+# 2. Quick Tunnel TETEP JALAN di background buat nyari link acak .trycloudflare.com
+echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak Bumper Worker)..."
+cloudflared tunnel --url "http://127.0.0.1:$WS_INTERNAL_PORT" --protocol http2 > $LOG_CF 2>&1 &
+
+# =================================================================
 
 # --- TAMBAHAN UTAMA: BADVPN UDPGW UNTUK MENDUKUNG TRAFIK UDP / GAME ---
 if [ -f /usr/local/bin/badvpn-udpgw ]; then
@@ -142,25 +146,20 @@ ws-proxy &
 # =================================================================
 (
     while true; do
-        # Info CPU & Model
         CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
         [ -z "$CPU_MODEL" ] && CPU_MODEL="Virtual Core (Railway)"
         CPU_CORES=$(grep -c 'processor' /proc/cpuinfo)
         
-        # Info RAM
         RAM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
         RAM_USED=$(free -m | awk '/Mem:/ {print $3}')
         
-        # Info Disk & Uptime
         DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}')
         UPTIME=$(uptime | awk -F'(,)|(up)' '{print $2}' | sed 's/^[ \t]*//')
         [ -z "$UPTIME" ] && UPTIME=$(uptime | awk '{print $3}')
         
-        # Hitung Online Users di SSH (Port 22) via netstat/ss
         SSH_ONLINE=$(netstat -anp 2>/dev/null | grep :22 | grep ESTABLISHED | wc -l)
         [ -z "$SSH_ONLINE" ] && SSH_ONLINE="0"
 
-        # Simpan ke format JSON mentah
         cat <<EOF > "$STATS_JSON"
 {
   "cpu_model": "$CPU_MODEL ($CPU_CORES Cores)",
@@ -168,14 +167,14 @@ ws-proxy &
   "ram_used": "${RAM_USED} MB",
   "disk_usage": "$DISK_USAGE",
   "uptime": "$UPTIME",
-  "ssh_online": "$SSH_ONLINE"
+  "ssh_online": "$SSH_ONLINE",
+  "custom_domain": "${MY_DOMAIN:-}"
 }
 EOF
         sleep 2
     done
 ) &
 
-# --- MEMULAI WEB UI MONITOR DI PORT 8081 ---
 echo "[*] Memulai Web UI Dashboard di Port $UI_PORT..."
 python3 /app/index.py &
 
@@ -186,5 +185,4 @@ export SSL_TARGET_PORT="$SSL_INTERNAL_PORT"
 export WS_MUX_TARGET_HOST="127.0.0.1"
 export WS_MUX_TARGET_PORT="$WS_INTERNAL_PORT"
 
-# Menjalankan Muxer utama di foreground
 exec mux
