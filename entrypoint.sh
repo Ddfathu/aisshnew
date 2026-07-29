@@ -28,6 +28,7 @@ SSL_INTERNAL_PORT="${SSL_INTERNAL_PORT:-2443}"
 WS_INTERNAL_PORT="8880"
 UI_PORT="8081"
 LOG_CF="/tmp/cloudflared.log"
+LOG_NAMED="/tmp/named_tunnel.log"
 STATS_JSON="/tmp/server_stats.json"
 
 echo "[*] Membuat sertifikat SSL Stunnel dinamis..."
@@ -121,10 +122,10 @@ stunnel /etc/stunnel/stunnel.conf &
 
 # --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL FIXED 🔥 ---
 
-# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway (SUDAH DINAMIS ANTI HARDCODE)
+# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway (LOG BELOK KE /tmp/named_tunnel.log)
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
     echo "[*] Menjalankan Cloudflare Named Tunnel (Mode Dinamis via Dashboard)..."
-    cloudflared tunnel run --protocol http2 --token "$CF_TUNNEL_TOKEN" &
+    cloudflared tunnel run --protocol http2 --token "$CF_TUNNEL_TOKEN" > $LOG_NAMED 2>&1 &
 fi
 
 # 2. Quick Tunnel DIUBAH MENEMBAK KE PUBLIC_PORT (8080 Muxer) Agar data diolah Muxer Golang
