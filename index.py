@@ -30,6 +30,33 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    # MENGAMBIL INFORMASI HOST SECARA DINAMIS UNTUK TEKS PEMBUATAN AKUN
+    def get_current_hosts(self):
+        quick_url = "Menunggu Quick Tunnel..."
+        named_url = ""
+        
+        if os.path.exists(STATS_PATH):
+            try:
+                with open(STATS_PATH, "r") as f:
+                    hw_info = json.load(f)
+                    if hw_info.get("custom_domain"):
+                        named_url = hw_info["custom_domain"].replace("https://", "").replace("http://", "")
+            except Exception:
+                pass
+                
+        if os.path.exists(LOG_PATH):
+            try:
+                with open(LOG_PATH, "r") as f:
+                    match = re.search(r'https://([a-zA-Z0-9-]+\.trycloudflare\.com)', f.read())
+                    if match:
+                        quick_url = match.group(1)
+            except Exception:
+                pass
+        
+        # Prioritaskan domain utama, kalau kosong pakai quick tunnel host
+        host_utama = named_url if named_url else quick_url
+        return host_utama
+
     def add_ssh(self, username, password):
         if not username or not password:
             return {"status": "error", "message": "Username dan password wajib diisi!"}
@@ -38,7 +65,23 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             subprocess.run(cmd_user, shell=True, check=True)
             cmd_pass = f"echo '{username}:{password}' | chpasswd"
             subprocess.run(cmd_pass, shell=True, check=True)
-            return {"status": "success", "message": f"User {username} berhasil dibuat!"}
+            
+            # Racik info detail akun untuk dilempar ke UI frontend
+            active_host = self.get_current_hosts()
+            account_details = (
+                f"===================================\n"
+                f"   ⚡ PREMIUM SSH ACCOUNTS CREATED ⚡\n"
+                f"===================================\n"
+                f"🔹 Host SSH  : {active_host}\n"
+                f"🔹 Port TLS  : 443\n"
+                f"🔹 Port NTLS : 80\n"
+                f"🔹 Username  : {username}\n"
+                f"🔹 Password  : {password}\n"
+                f"===================================\n"
+                f"  powered by : d e d e f a t h u\n"
+                f"==================================="
+            )
+            return {"status": "success", "message": account_details}
         except subprocess.CalledProcessError:
             return {"status": "error", "message": f"Gagal membuat user. Username '{username}' mungkin sudah ada."}
         except Exception as e:
@@ -124,7 +167,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 pass
             return
 
-        # 🟢 ROUTER 3: TAMPILAN DASHBOARD HTML UTAMA + TOMBOL SSH MENGGILA
+        # 🟢 ROUTER 3: TAMPILAN DASHBOARD HTML UTAMA
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
@@ -158,13 +201,21 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 .stat-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
                 .stat-value { font-size: 14px; font-weight: bold; color: #f1f5f9; margin-top: 4px; }
 
-                /* 🛠️ STYLE BARU PANEL SSH ACCOUNTS */
                 .ssh-manager { background: #1f2937; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 20px; }
-                .ssh-title { font-size: 13px; font-weight: bold; color: #38bdf8; text-transform: uppercase; margin-bottom: 10px; display: flex; justify-content: space-between; }
+                .ssh-title { font-size: 13px; font-weight: bold; color: #38bdf8; text-transform: uppercase; margin-bottom: 10px; }
                 .input-group { display: flex; gap: 8px; margin-bottom: 10px; }
                 .input-ssh { background: #030712; border: 1px solid #4b5563; padding: 8px 12px; border-radius: 6px; color: #fff; font-size: 13px; width: 100%; }
                 .input-ssh:focus { border-color: #38bdf8; outline: none; }
                 .btn-add { background: #38bdf8; color: #090d16; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px; }
+                
+                /* STYLE KHUSUS BOX HASIL STRUK AKUN */
+                .result-box { 
+                    display: none; background: #030712; border: 1px solid #4ade80; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #4ade80; white-space: pre-wrap; margin-bottom: 15px; text-align: left;
+                }
+                .btn-copy-result { 
+                    display: none; background: #4ade80; color: #090d16; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; width: 100%; margin-bottom: 15px;
+                }
+
                 .ssh-list { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
                 .ssh-list th { text-align: left; padding: 6px; color: #94a3b8; border-bottom: 1px solid #334155; }
                 .ssh-list td { padding: 6px; border-bottom: 1px solid #1f2937; }
@@ -216,17 +267,19 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     </div>
                 </div>
 
-                <!-- 🛠️ ELEMENT BARU: PANEL TOMBOL SSH MANAGEMENT -->
                 <div class="ssh-manager">
-                    <div class="ssh-title">
-                        <span>➕ Buat Akun SSH Baru</span>
-                    </div>
+                    <div class="ssh-title">➕ Buat Akun SSH Baru</div>
                     <div class="input-group">
                         <input type="text" id="ssh-user" class="input-ssh" placeholder="Username...">
                         <input type="password" id="ssh-pass" class="input-ssh" placeholder="Password...">
                         <button class="btn-add" onclick="createAccount()">ADD</button>
                     </div>
-                    <div id="ssh-msg" style="font-size: 11px; margin-top: 5px; font-weight: bold;"></div>
+                    
+                    <!-- AREA OUTPUT STRUK DETAIL AKUN SSH -->
+                    <div id="ssh-result" class="result-box"></div>
+                    <button id="btn-copy-acc" class="btn-copy-result" onclick="copyAccountText()">📋 COPY DETAIL AKUN</button>
+                    
+                    <div id="ssh-msg" style="font-size: 11px; margin-top: 5px; font-weight: bold; margin-bottom: 5px;"></div>
                     
                     <div class="ssh-title" style="margin-top: 15px; border-top: 1px solid #334155; padding-top: 10px;">
                         <span>📋 Daftar Akun Terdaftar</span>
@@ -303,6 +356,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     let user = document.getElementById('ssh-user').value.trim();
                     let pass = document.getElementById('ssh-pass').value.trim();
                     let msg = document.getElementById('ssh-msg');
+                    let resBox = document.getElementById('ssh-result');
+                    let copyBtn = document.getElementById('btn-copy-acc');
                     
                     if(!user || !pass) {
                         msg.style.color = "#ef4444";
@@ -314,16 +369,35 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         let res = await fetch(`/api/add?user=${user}&pass=${pass}`);
                         let data = await res.json();
                         if(data.status === "success") {
-                            msg.style.color = "#4ade80";
-                            msg.innerText = data.message;
+                            msg.innerText = "";
+                            resBox.innerText = data.message;
+                            resBox.style.display = "block";
+                            copyBtn.style.display = "block";
+                            
                             document.getElementById('ssh-user').value = "";
                             document.getElementById('ssh-pass').value = "";
                             fetchAccounts();
                         } else {
                             msg.style.color = "#ef4444";
                             msg.innerText = data.message;
+                            resBox.style.display = "none";
+                            copyBtn.style.display = "none";
                         }
                     } catch(e) { msg.innerText = "Gagal memproses API"; }
+                }
+
+                function copyAccountText() {
+                    let txt = document.getElementById('ssh-result').innerText;
+                    navigator.clipboard.writeText(txt);
+                    let btn = document.getElementById('btn-copy-acc');
+                    btn.innerText = "✅ STRUK AKUN BERHASIL DICOPY!";
+                    btn.style.background = "#1f2937";
+                    btn.style.color = "#4ade80";
+                    setTimeout(() => {
+                        btn.innerText = "📋 COPY DETAIL AKUN";
+                        btn.style.background = "#4ade80";
+                        btn.style.color = "#090d16";
+                    }, 1500);
                 }
 
                 async function deleteAccount(username) {
