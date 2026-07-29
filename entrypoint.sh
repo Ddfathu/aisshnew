@@ -121,10 +121,10 @@ stunnel /etc/stunnel/stunnel.conf &
 
 # --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL FIXED 🔥 ---
 
-# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway
+# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway (SUDAH DINAMIS ANTI HARDCODE)
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
-    echo "[*] Menjalankan Cloudflare Named Tunnel (Domain Custom Lu)..."
-    cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" &
+    echo "[*] Menjalankan Cloudflare Named Tunnel (Mode Dinamis via Dashboard)..."
+    cloudflared tunnel run --protocol http2 --token "$CF_TUNNEL_TOKEN" &
 fi
 
 # 2. Quick Tunnel DIUBAH MENEMBAK KE PUBLIC_PORT (8080 Muxer) Agar data diolah Muxer Golang
@@ -194,5 +194,9 @@ export SSL_TARGET_HOST="127.0.0.1"
 export SSL_TARGET_PORT="$SSL_INTERNAL_PORT"
 export WS_MUX_TARGET_HOST="127.0.0.1"
 export WS_MUX_TARGET_PORT="$WS_INTERNAL_PORT"
+
+# Jalur Target Pipa Tambahan untuk BadVPN Game ke Muxer Baru
+export UDPGW_TARGET_HOST="127.0.0.1"
+export UDPGW_TARGET_PORT="7300"
 
 exec mux
