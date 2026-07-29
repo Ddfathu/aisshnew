@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"log"
 	"net"
@@ -30,20 +31,32 @@ func main() {
 		wsTarget = "127.0.0.1:8880"
 	}
 
+	// 🛠️ JALUR KUNCI BARU: Ambil konfigurasi port BadVPN UDPGW dari entrypoint.sh
+	udpgwHost := os.Getenv("UDPGW_TARGET_HOST")
+	udpgwPort := os.Getenv("UDPGW_TARGET_PORT")
+	if udpgwHost == "" {
+		udpgwHost = "127.0.0.1"
+	}
+	if udpgwPort == "" {
+		udpgwPort = "7300"
+	}
+	udpgwTarget := udpgwHost + ":" + udpgwPort
+
 	listener, err := net.Listen("tcp", "0.0.0.0:"+publicPort)
 	if err != nil {
 		log.Fatalf("[Mux] Gagal listen di port %s: %v", publicPort, err)
 	}
 	defer listener.Close()
 
-	log.Printf("[Mux] Jalan di 0.0.0.0:%s -> SSL:%s | WS:%s -> High-Speed Mode", publicPort, sslTarget, wsTarget)
+	log.Printf("[Mux] Jalan di 0.0.0.0:%s -> SSL:%s | WS:%s | UDPGW:%s -> Ultra Game Mode", publicPort, sslTarget, wsTarget, udpgwTarget)
 
 	for {
 		clientConn, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		go handleClient(clientConn, sslTarget, wsTarget)
+		// Kirim target udpgwTarget ke handlerna
+		go handleClient(clientConn, sslTarget, wsTarget, udpgwTarget)
 	}
 }
 
@@ -57,12 +70,11 @@ func tweakSocket(conn net.Conn) {
 	}
 }
 
-func handleClient(client net.Conn, sslTarget, wsTarget string) {
+func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 	tweakSocket(client)
 	defer client.Close()
 
 	// --- OPTIMASI BUFFER: Diperbesar jadi 64KB ---
-	// Agar payload manipulasi sepanjang apa pun bisa ditampung tanpa merusak stream asli.
 	reader := bufio.NewReaderSize(client, 65536)
 
 	// Batasi waktu ngintip byte pertama (Anti-Stuck / Anti-Sunek)
@@ -77,7 +89,7 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 	var targetAddr string
 	var label string
 
-	// Deteksi protokol berdasarkan byte pertama
+	// Deteksi protokol berdasarkan byte pertama dan isi intipan buffer teks
 	if err != nil {
 		targetAddr = wsTarget
 		label = "WS-Proxy (Default/Timeout)"
@@ -85,8 +97,16 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 		targetAddr = sslTarget
 		label = "SSL/Stunnel"
 	} else {
-		targetAddr = wsTarget
-		label = "WS-Proxy"
+		// 🛠️ SMART DETECTOR UNTUK GAME / UDPGW
+		// Intip sikit teks payload di buffer (maksimal 512 byte) untuk mencari penanda port badvpn
+		peekBytes, peekErr := reader.Peek(reader.Buffered())
+		if peekErr == nil && (bytes.Contains(peekBytes, []byte("7300")) || bytes.Contains(peekBytes, []byte("badvpn")) || bytes.Contains(peekBytes, []byte("UDPGW"))) {
+			targetAddr = udpgwTarget
+			label = "BadVPN-UDPGW (Game Mode)"
+		} else {
+			targetAddr = wsTarget
+			label = "WS-Proxy"
+		}
 	}
 
 	log.Printf("[Mux] Koneksi dari %s dialihkan ke %s (%s)", client.RemoteAddr(), label, targetAddr)
