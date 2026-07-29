@@ -52,9 +52,12 @@ cat << 'EOF' > /etc/ssh/ssh_banner
               👑 SELAMAT MENIKMATI 👑              
               SSH SERVER RAILWAY MOD              
 ==================================================
- SPESIFIKASI:                                     
- 🔹 MULTIPLEXER : GOLANG HIGH-SPEED CORE v3.2    
+ SPESIFIKASI:  
+ <br>
+ 🔹 MULTIPLEXER : GOLANG HIGH-SPEED CORE v3.2  
+ <br>
  🔹 OS PLATFORM : LINUX ALPINE (RAM MONSTER MODE)  
+ <br>
  🔹 SSH SERVICE : OPENSSH SERVER HIGH COMPAT      
 ==================================================
           powered by : d e d e f a t h u          
