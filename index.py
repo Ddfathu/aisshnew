@@ -3,6 +3,8 @@ import socketserver
 import re
 import os
 import json
+import subprocess
+import urllib.parse
 
 PORT = 8081
 LOG_PATH = "/tmp/cloudflared.log"
@@ -13,9 +15,93 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+    # 🛠️ FITUR MANAGEMENT SSH (ALPINE MODE) 🛠️
+    def list_ssh(self):
+        try:
+            users = []
+            with open("/etc/passwd", "r") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    username = parts[0]
+                    uid = int(parts[2])
+                    shell = parts[-1]
+                    
+                    # Filter user biasa (UID >= 1000 dan bukan user sistem bawaan)
+                    if uid >= 1000 and username not in ["nobody", "alpine"]:
+                        users.append({"username": username, "uid": uid, "shell": shell})
+            return {"status": "success", "total": len(users), "users": users}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def add_ssh(self, username, password):
+        if not username or not password:
+            return {"status": "error", "message": "Username dan password wajib diisi!"}
+        try:
+            # Perintah adduser khas Alpine Linux (-D tanpa interaktif)
+            cmd_user = f"adduser -D -s /bin/bash {username}"
+            subprocess.run(cmd_user, shell=True, check=True)
+            
+            # Suntik password ke user baru
+            cmd_pass = f"echo '{username}:{password}' | chpasswd"
+            subprocess.run(cmd_pass, shell=True, check=True)
+            return {"status": "success", "message": f"User {username} berhasil dibuat!"}
+        except subprocess.CalledProcessError:
+            return {"status": "error", "message": f"Gagal membuat user. Username '{username}' mungkin sudah ada."}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def delete_ssh(self, username):
+        if not username:
+            return {"status": "error", "message": "Username wajib diisi!"}
+        try:
+            # Hapus user di Alpine
+            cmd_del = f"deluser {username}"
+            subprocess.run(cmd_del, shell=True, check=True)
+            
+            # Bersihkan sisa folder home
+            subprocess.run(f"rm -rf /home/{username}", shell=True)
+            return {"status": "success", "message": f"User {username} berhasil dihapus!"}
+        except subprocess.CalledProcessError:
+            return {"status": "error", "message": f"Gagal menghapus user. User '{username}' tidak ditemukan."}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def do_GET(self):
-        # 1. Jalur API info hardware & domain
-        if self.path == "/api/stats":
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        query = urllib.parse.parse_qs(parsed_url.query)
+
+        # ==========================================
+        # 🟢 ROUTER 1: API MANAGEMENT SSH
+        # ==========================================
+        if path in ["/api/list", "/api/add", "/api/delete"]:
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            response_data = {"status": "error", "message": "Aksi tidak dikenal"}
+            
+            if path == "/api/list":
+                response_data = self.list_ssh()
+            elif path == "/api/add":
+                username = query.get("user", [None])[0]
+                password = query.get("pass", [None])[0]
+                response_data = self.add_ssh(username, password)
+            elif path == "/api/delete":
+                username = query.get("user", [None])[0]
+                response_data = self.delete_ssh(username)
+                
+            try:
+                self.wfile.write(json.dumps(response_data).encode('utf-8'))
+            except Exception:
+                pass
+            return
+
+        # ==========================================
+        # 🟢 ROUTER 2: API LIVE MONITOR HARDWARE
+        # ==========================================
+        if path == "/api/stats":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -57,7 +143,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 pass
             return
 
-        # 2. Jalur Tampilan Utama UI HTML
+        # ==========================================
+        # 🟢 ROUTER 3: TAMPILAN DASHBOARD HTML UTAMA
+        # ==========================================
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
