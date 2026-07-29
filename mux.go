@@ -80,8 +80,8 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 	// Batasi waktu ngintip byte pertama (Anti-Stuck / Anti-Sunek)
 	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
 	
-	// Intip 1 byte pertama tanpa membuangnya dari buffer
-	firstByte, err := reader.Peek(1)
+	// 🔥 DIUBAH: Intip 4 byte pertama sekaligus biar kebaca string "SSH-" dari Termux
+	peekBytes, err := reader.Peek(4)
 	
 	// Reset kembali deadline ke normal agar koneksi tidak terputus setelah 3 detik
 	_ = client.SetReadDeadline(time.Time{})
@@ -93,14 +93,18 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 	if err != nil {
 		targetAddr = wsTarget
 		label = "WS-Proxy (Default/Timeout)"
-	} else if firstByte[0] == TLSHandshakeByte {
+	} else if peekBytes[0] == TLSHandshakeByte {
 		targetAddr = sslTarget
 		label = "SSL/Stunnel"
+	} else if bytes.HasPrefix(peekBytes, []byte("SSH-")) {
+		// 🔥 BYPASS JALUR RAW SSH: Jika Termux nembak SSH biasa, bypass langsung ke OpenSSH lokal port 22
+		targetAddr = "127.0.0.1:22"
+		label = "Raw OpenSSH (Port 22)"
 	} else {
 		// 🛠️ SMART DETECTOR UNTUK GAME / UDPGW
 		// Intip sikit teks payload di buffer (maksimal 512 byte) untuk mencari penanda port badvpn
-		peekBytes, peekErr := reader.Peek(reader.Buffered())
-		if peekErr == nil && (bytes.Contains(peekBytes, []byte("7300")) || bytes.Contains(peekBytes, []byte("badvpn")) || bytes.Contains(peekBytes, []byte("UDPGW"))) {
+		bufferedBytes, peekErr := reader.Peek(reader.Buffered())
+		if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("7300")) || bytes.Contains(bufferedBytes, []byte("badvpn")) || bytes.Contains(bufferedBytes, []byte("UDPGW"))) {
 			targetAddr = udpgwTarget
 			label = "BadVPN-UDPGW (Game Mode)"
 		} else {
