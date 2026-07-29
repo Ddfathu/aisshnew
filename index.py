@@ -1,188 +1,206 @@
-#!/bin/bash
+import http.server
+import socketserver
+import re
+import os
+import json
 
-# 🔥 KUNCI UTAMA ANTI REKONEK: Buka paksa limit socket & stack size Alpine Linux
-ulimit -n 65535
-ulimit -s unlimited
+PORT = 8081
+LOG_PATH = "/tmp/cloudflared.log"
+STATS_PATH = "/tmp/server_stats.json"
 
-# =================================================================
-# 🚀 ULTRA TURBO KERNEL v3.2 (PURE STANDARD FOR GOLANG + OPENSSH) 🚀
-# =================================================================
-echo "[*] Mengaktifkan TCP BBR dan Fair Queuing..."
-sysctl -w net.core.default_qdisc=fq 2>/dev/null
-sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null
+class DashboardHandler(http.server.SimpleHTTPRequestHandler):
+    # Log error dibikin pasif biar gak mengebiri server pas ada request masuk
+    def log_message(self, format, *args):
+        return
 
-echo "[*] Mengoptimalkan ukuran buffer TCP Kernel (BUFFER RAKSASA)..."
-sysctl -w net.ipv4.tcp_rmem="4096 8388608 16777216" 2>/dev/null
-sysctl -w net.ipv4.tcp_wmem="4096 8388608 16777216" 2>/dev/null
-sysctl -w net.core.rmem_max=16777216 2>/dev/null
-sysctl -w net.core.wmem_max=16777216 2>/dev/null
+    def do_GET(self):
+        # 1. Jalur API info hardware & domain
+        if self.path == "/api/stats":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            quick_url = "Menunggu Quick Tunnel siap..."
+            status = "ONLINE"
+            
+            hw_info = {"cpu_model": "Loading...", "ram_total": "0", "ram_used": "0", "disk_usage": "0%", "uptime": "0", "ssh_online": "0", "custom_domain": ""}
+            if os.path.exists(STATS_PATH):
+                try:
+                    with open(STATS_PATH, "r") as f:
+                        hw_info = json.load(f)
+                except Exception:
+                    pass
+            
+            if os.path.exists(LOG_PATH):
+                try:
+                    with open(LOG_PATH, "r") as f:
+                        match = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', f.read())
+                        if match:
+                            quick_url = match.group(0)
+                except Exception:
+                    pass
+            
+            named_url = "Tidak Aktif (Token Kosong)"
+            if hw_info.get("custom_domain"):
+                named_url = "https://" + hw_info["custom_domain"].replace("https://", "").replace("http://", "")
 
-# Kelonggaran antrean kartu jaringan agar engine Go-routine melesat lempeng
-sysctl -w net.core.netdev_max_backlog=50000 2>/dev/null
-sysctl -w net.ipv4.tcp_max_syn_backlog=8192 2>/dev/null
+            response_data = {
+                "quick_url": quick_url,
+                "named_url": named_url,
+                "status": status,
+                **hw_info
+            }
+            try:
+                self.wfile.write(json.dumps(response_data).encode('utf-8'))
+            except Exception:
+                pass
+            return
 
-USER_NAME="${SSH_USER:-dd}"
-USER_PASS="${SSH_PASSWORD:-dd}"
-PUBLIC_PORT="${PORT:-8080}"
-SSL_INTERNAL_PORT="${SSL_INTERNAL_PORT:-2443}"
-WS_INTERNAL_PORT="8880"
-UI_PORT="8081"
-LOG_CF="/tmp/cloudflared.log"
-STATS_JSON="/tmp/server_stats.json"
-
-echo "[*] Membuat sertifikat SSL Stunnel dinamis..."
-mkdir -p /etc/stunnel /var/run/stunnel
-openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
-    -subj "/C=ID/ST=Jakarta/L=Jakarta/O=RailwaySSH/CN=localhost" \
-    -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem
-
-chown -R stunnel:stunnel /etc/stunnel /var/run/stunnel
-chmod 600 /etc/stunnel/stunnel.pem
-
-echo "[*] Mengonfigurasi User SSH (Alpine Mode)..."
-if ! id "$USER_NAME" &>/dev/null; then
-    adduser -D -s /bin/bash "$USER_NAME"
-    echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-fi
-echo "$USER_NAME:$USER_PASS" | chpasswd
-
-echo "[*] Membuat Banner Rapi untuk OpenSSH..."
-cat << 'EOF' > /etc/ssh/ssh_banner
-==================================================
-              👑 SELAMAT MENIKMATI 👑              
-              SSH SERVER RAILWAY MOD              
-==================================================
- SPESIFIKASI:                                     
- 🔹 MULTIPLEXER : GOLANG HIGH-SPEED CORE v3.2    
- 🔹 OS PLATFORM : LINUX ALPINE (RAM MONSTER MODE)  
- 🔹 SSH SERVICE : OPENSSH SERVER HIGH COMPAT      
-==================================================
-          powered by : d e d e f a t h u          
-==================================================
-EOF
-
-echo "[*] Menyiapkan Host Keys untuk OpenSSH..."
-ssh-keygen -A
-
-echo "[*] Membuat konfigurasi OpenSSH Suci Murni (Anti-Rekonek Version)..."
-cat << 'EOF' > /etc/ssh/sshd_config
-Port 22
-ListenAddress 127.0.0.1
-PermitRootLogin yes
-PasswordAuthentication yes
-PermitEmptyPasswords no
-ChallengeResponseAuthentication no
-UsePAM no
-X11Forwarding no
-PrintMotd no
-AcceptEnv LANG LC_*
-Subsystem sftp /usr/lib/ssh/sftp-server
-Banner /etc/ssh/ssh_banner
-
-# 🛠 KUNCI UTAMA ANTI TIMEOUT:
-UseDNS no
-ClientAliveInterval 20
-ClientAliveCountMax 3
-EOF
-
-echo "[*] Memulai OpenSSH Server di Port Lokal 22..."
-/usr/sbin/sshd
-
-echo "[*] Membuat konfigurasi Stunnel..."
-cat <<EOF > /etc/stunnel/stunnel.conf
-pid = /var/run/stunnel.pid
-foreground = yes
-debug = 4
-setuid = stunnel
-setgid = stunnel
-
-[ssh-ssl]
-accept = 127.0.0.1:$SSL_INTERNAL_PORT
-connect = 127.0.0.1:22
-cert = /etc/stunnel/stunnel.pem
-EOF
-
-echo "[*] Menambahkan sesuatu di .bashrc..."
-cat <<'EOF'>> /etc/bash.bashrc
-clear
-alias c='clear'
-alias x='exit'
-alias cls='clear;ls'
-menu
-EOF
-echo "source /etc/bash.bashrc" >> /home/"$USER_NAME"/.bashrc
-
-echo "[*] Memulai Stunnel..."
-stunnel /etc/stunnel/stunnel.conf &
-
-# --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL 🔥 ---
-
-# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway
-if [ -n "$CF_TUNNEL_TOKEN" ]; then
-    echo "[*] Menjalankan Cloudflare Named Tunnel (Domain Custom Lu)..."
-    cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" &
-fi
-
-# 2. Quick Tunnel TETEP JALAN di background buat nyari link acak .trycloudflare.com
-echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak Bumper Worker)..."
-cloudflared tunnel --url "http://127.0.0.1:$WS_INTERNAL_PORT" --protocol http2 > $LOG_CF 2>&1 &
-
-# =================================================================
-
-# --- TAMBAHAN UTAMA: BADVPN UDPGW UNTUK MENDUKUNG TRAFIK UDP / GAME ---
-if [ -f /usr/local/bin/badvpn-udpgw ]; then
-    echo "[*] Memulai BadVPN udpgw di Port Lokal 7300..."
-    /usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 500 --max-connections-for-client 20 &
-else
-    echo "[!] Binary badvpn-udpgw tidak ditemukan!"
-fi
-
-echo "[*] Memulai WS-Proxy Engine internal..."
-export WS_PORT="$WS_INTERNAL_PORT"
-ws-proxy &
-
-# =================================================================
-# 📊 BACKGROUND STATS COLLECTOR FOR HARDWARE & USERS 📊
-# =================================================================
-(
-    while true; do
-        CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
-        [ -z "$CPU_MODEL" ] && CPU_MODEL="Virtual Core (Railway)"
-        CPU_CORES=$(grep -c 'processor' /proc/cpuinfo)
+        # 2. Jalur Tampilan Utama UI HTML
+        self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
         
-        RAM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
-        RAM_USED=$(free -m | awk '/Mem:/ {print $3}')
-        
-        DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}')
-        UPTIME=$(uptime | awk -F'(,)|(up)' '{print $2}' | sed 's/^[ \t]*//')
-        [ -z "$UPTIME" ] && UPTIME=$(uptime | awk '{print $3}')
-        
-        SSH_ONLINE=$(netstat -anp 2>/dev/null | grep :22 | grep ESTABLISHED | wc -l)
-        [ -z "$SSH_ONLINE" ] && SSH_ONLINE="0"
+        html = """
+        <!DOCTYPE html>
+        <html lang="id">
+        <head>
+            <meta charset="UTF-8">
+            <title>⚡ PREMIUM SSH RAILWAY PANEL ⚡</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                body { 
+                    font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+                    background: #090d16; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 15px;
+                }
+                .container { 
+                    background: #111827; width: 100%; max-width: 500px; padding: 25px; border-radius: 16px; box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.8); border: 1px solid #1f2937;
+                }
+                .header { text-align: center; margin-bottom: 20px; }
+                h1 { font-size: 20px; color: #38bdf8; text-transform: uppercase; letter-spacing: 1px; }
+                .dev-tag { font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
+                
+                .status-container { text-align: center; margin-bottom: 15px; }
+                .status-badge { display: inline-block; background: #1f2937; padding: 5px 12px; border-radius: 50px; font-size: 11px; font-weight: bold; border: 1px solid #334155; }
+                .status-dot { height: 8px; width: 8px; background-color: #4ade80; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 8px #4ade80; }
 
-        cat <<EOF > "$STATS_JSON"
-{
-  "cpu_model": "$CPU_MODEL ($CPU_CORES Cores)",
-  "ram_total": "${RAM_TOTAL} MB",
-  "ram_used": "${RAM_USED} MB",
-  "disk_usage": "$DISK_USAGE",
-  "uptime": "$UPTIME",
-  "ssh_online": "$SSH_ONLINE",
-  "custom_domain": "${MY_DOMAIN:-}"
-}
-EOF
-        sleep 2
-    done
-) &
+                .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+                .stat-card { background: #1f2937; padding: 12px; border-radius: 8px; border: 1px solid #334155; text-align: left; }
+                .stat-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
+                .stat-value { font-size: 14px; font-weight: bold; color: #f1f5f9; margin-top: 4px; }
 
-echo "[*] Memulai Web UI Dashboard di Port $UI_PORT..."
-python3 /app/index.py &
+                .url-section { background: #030712; border: 1px solid #38bdf8; padding: 12px; border-radius: 8px; margin-bottom: 12px; text-align: center; }
+                .url-title { font-size: 11px; color: #94a3b8; font-weight: bold; text-transform: uppercase; }
+                .url-box { font-family: monospace; font-size: 13px; word-break: break-all; color: #38bdf8; font-weight: bold; margin: 6px 0; }
+                
+                .btn-copy { 
+                    background: #38bdf8; color: #090d16; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; width: 100%; transition: all 0.2s;
+                }
+                .btn-copy:active { transform: scale(0.98); }
+                .note { font-size: 11px; color: #64748b; text-align: center; line-height: 1.4; margin-top: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>👑 DDFATHU DOUBLE MONITOR 👑</h1>
+                    <div class="dev-tag">DYNAMIC DUAL-TUNNEL CORE ACTIVE</div>
+                </div>
+                
+                <div class="status-container">
+                    <div class="status-badge">
+                        <span class="status-dot"></span>
+                        <span style="color: #4ade80">TUNNELS ONLINE</span>
+                    </div>
+                </div>
 
-echo "[*] Memulai Front Muxer Engine Utama (Golang Mode)..."
-export PORT="$PUBLIC_PORT"
-export SSL_TARGET_HOST="127.0.0.1"
-export SSL_TARGET_PORT="$SSL_INTERNAL_PORT"
-export WS_MUX_TARGET_HOST="127.0.0.1"
-export WS_MUX_TARGET_PORT="$WS_INTERNAL_PORT"
+                <div class="stats-grid">
+                    <div class="stat-card" style="grid-column: span 2;">
+                        <div class="stat-title">CPU Model</div>
+                        <div class="stat-value" id="cpu" style="font-size:12px; color:#38bdf8;">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-title">RAM Used / Total</div>
+                        <div class="stat-value" id="ram">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-title">Disk Usage (/)</div>
+                        <div class="stat-value" id="disk">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-title">Server Uptime</div>
+                        <div class="stat-value" id="uptime" style="font-size:12px;">Loading...</div>
+                    </div>
+                    <div class="stat-card" style="border-color: #a855f7;">
+                        <div class="stat-title" style="color:#d8b4fe;">SSH Online Users</div>
+                        <div class="stat-value" id="ssh" style="font-size:18px; color:#a855f7;">👥 0 Users</div>
+                    </div>
+                </div>
+                
+                <div class="url-section" style="border-color: #a855f7;">
+                    <div class="url-title" style="color: #d8b4fe;">1. Named Tunnel (Domain Utama)</div>
+                    <div class="url-box" id="named-url" style="color: #d8b4fe;">Loading...</div>
+                    <button class="btn-copy" id="btn-copy-named" style="background:#a855f7; color:#fff;" onclick="copyTxt('named-url', 'btn-copy-named')">📋 COPY DOMAIN UTAMA</button>
+                </div>
 
-exec mux
+                <div class="url-section">
+                    <div class="url-title">2. Quick Tunnel (Link Acak Bumper Worker)</div>
+                    <div class="url-box" id="quick-url">Loading...</div>
+                    <button class="btn-copy" id="btn-copy-quick" onclick="copyTxt('quick-url', 'btn-copy-quick')">📋 COPY LINK ACAK WORKER</button>
+                </div>
+                
+                <p class="note">Dua tunnel berjalan beriringan tanpa bentrok.<br>Salin link acak di atas ke dalam bumper Worker lu.</p>
+            </div>
+
+            <script>
+                async function updateStats() {
+                    try {
+                        let res = await fetch('/api/stats');
+                        let data = await res.json();
+                        
+                        document.getElementById('cpu').innerText = data.cpu_model;
+                        document.getElementById('ram').innerText = data.ram_used + " / " + data.ram_total;
+                        document.getElementById('disk').innerText = data.disk_usage;
+                        document.getElementById('uptime').innerText = data.uptime;
+                        document.getElementById('ssh').innerText = "👥 " + data.ssh_online + " Users";
+                        document.getElementById('named-url').innerText = data.named_url;
+                        document.getElementById('quick-url').innerText = data.quick_url;
+                    } catch(e) { console.log(e); }
+                }
+
+                function copyTxt(elementId, btnId) {
+                    let urlText = document.getElementById(elementId).innerText;
+                    if(!urlText.includes("Menunggu") && !urlText.includes("Tidak Aktif")) {
+                        navigator.clipboard.writeText(urlText);
+                        let btn = document.getElementById(btnId);
+                        let oldText = btn.innerText;
+                        btn.innerText = "✅ COPIED!";
+                        btn.style.background = "#4ade80";
+                        btn.style.color = "#090d16";
+                        setTimeout(() => {
+                            btn.innerText = oldText;
+                            btn.style.background = elementId === 'named-url' ? '#a855f7' : '#38bdf8';
+                            btn.style.color = elementId === 'named-url' ? '#fff' : '#090d16';
+                        }, 1500);
+                    }
+                }
+
+                setInterval(updateStats, 2000);
+                updateStats();
+            </script>
+        </body>
+        </html>
+        """
+        try:
+            self.wfile.write(html.encode('utf-8'))
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    # Mengizinkan reuse port agar tidak macet saat kontainer restart lambat
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("0.0.0.0", PORT), DashboardHandler) as httpd:
+        print(f"Dual Tunnel Panel UI running at port {PORT}")
+        httpd.serve_forever()
