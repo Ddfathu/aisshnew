@@ -118,7 +118,7 @@ echo "source /etc/bash.bashrc" >> /home/"$USER_NAME"/.bashrc
 echo "[*] Memulai Stunnel..."
 stunnel /etc/stunnel/stunnel.conf &
 
-# --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL 🔥 ---
+# --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL FIXED 🔥 ---
 
 # 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
@@ -126,9 +126,9 @@ if [ -n "$CF_TUNNEL_TOKEN" ]; then
     cloudflared tunnel run --protocol http2 --url "http://127.0.0.1:$PUBLIC_PORT" --token "$CF_TUNNEL_TOKEN" &
 fi
 
-# 2. Quick Tunnel TETEP JALAN di background buat nyari link acak .trycloudflare.com
-echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak Bumper Worker)..."
-cloudflared tunnel --url "http://127.0.0.1:$WS_INTERNAL_PORT" --protocol http2 > $LOG_CF 2>&1 &
+# 2. Quick Tunnel DIUBAH MENEMBAK KE PUBLIC_PORT (8080 Muxer) Agar data diolah Muxer Golang
+echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak)..."
+cloudflared tunnel --url "http://127.0.0.1:$PUBLIC_PORT" --protocol http2 > $LOG_CF 2>&1 &
 
 # =================================================================
 
@@ -194,5 +194,4 @@ export SSL_TARGET_PORT="$SSL_INTERNAL_PORT"
 export WS_MUX_TARGET_HOST="127.0.0.1"
 export WS_MUX_TARGET_PORT="$WS_INTERNAL_PORT"
 
-# FIXED: Menghapus typo tanda '>' agar mux berjalan lancar
 exec mux
