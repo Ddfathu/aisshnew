@@ -563,6 +563,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("0.0.0.0", PORT), DashboardHandler) as httpd:
+    # 🔥 FIX BINDING SAKTI: Menggunakan "" (interface kosong) agar mau menerima loopback proxy milik cloudflared tunnel
+    with socketserver.TCPServer(("", PORT), DashboardHandler) as httpd:
         print(f"Dual Tunnel Panel UI running at port {PORT}")
         httpd.serve_forever()
