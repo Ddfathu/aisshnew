@@ -10,7 +10,7 @@ STATS_PATH = "/tmp/server_stats.json"
 
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        # Fitur API mini untuk update data hardware tanpa refresh halaman
+        # Fitur API mini untuk update data hardware
         if self.path == "/api/stats":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -18,12 +18,27 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             
             tunnel_url = "Menunggu Argo Tunnel siap..."
             status = "OFFLINE"
+            
             if os.path.exists(LOG_PATH):
                 with open(LOG_PATH, "r") as f:
-                    match = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', f.read())
-                    if match:
-                        tunnel_url = match.group(0)
+                    log_content = f.read()
+                    
+                    # 1. Cek dulu apakah ini Quick Tunnel (Tanpa Token)
+                    match_quick = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', log_content)
+                    
+                    # 2. Cek apakah ini Named Tunnel (Pake Token). Biasanya log-nya: "Route internet traffic from https://domain.com..."
+                    match_named = re.search(r'Route internet traffic from https://([a-zA-Z0-9.-]+)', log_content)
+                    
+                    if match_quick:
+                        tunnel_url = match_quick.group(0)
                         status = "ONLINE"
+                    elif match_named:
+                        tunnel_url = "https://" + match_named.group(1)
+                        status = "ONLINE"
+                    elif "Connection established" in log_content or "Registered tunnel connection" in log_content:
+                        # Fallback jika log route tidak tercetak tapi tunnel dipastikan tersambung aktif
+                        status = "ONLINE"
+                        tunnel_url = "Tunnel Aktif (Membaca Domain...)"
                         
             hw_info = {"cpu_model": "Loading...", "ram_total": "0", "ram_used": "0", "disk_usage": "0%", "uptime": "0", "ssh_online": "0"}
             if os.path.exists(STATS_PATH):
@@ -41,7 +56,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
             return
 
-        # Halaman Utama UI
+        # Halaman Utama UI (Tetap Sama Tanpa Refresh Kedip)
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
@@ -123,7 +138,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 </div>
                 
                 <div class="url-section">
-                    <div style="font-size:12px; color:#94a3b8; font-weight:500;">Copy Quick Tunnel URL ke Worker:</div>
+                    <div style="font-size:12px; color:#94a3b8; font-weight:500;">Copy URL Tunnel ke Worker:</div>
                     <div class="url-box" id="tunnel-url">Loading...</div>
                     <button class="btn-copy" id="copy-btn" onclick="copyUrl()">📋 COPY URL</button>
                 </div>
@@ -137,7 +152,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         let res = await fetch('/api/stats');
                         let data = await res.json();
                         
-                        // Update status tunnel
                         let dot = document.getElementById('dot');
                         let txt = document.getElementById('status-text');
                         if(data.status === "ONLINE") {
@@ -152,7 +166,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                             txt.innerText = "OFFLINE";
                         }
                         
-                        // Update teks hardware
                         document.getElementById('cpu').innerText = data.cpu_model;
                         document.getElementById('ram').innerText = data.ram_used + " / " + data.ram_total;
                         document.getElementById('disk').innerText = data.disk_usage;
@@ -164,7 +177,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
                 function copyUrl() {
                     let urlText = document.getElementById('tunnel-url').innerText;
-                    if(urlText.includes("trycloudflare.com")) {
+                    if(!urlText.includes("Menunggu")) {
                         navigator.clipboard.writeText(urlText);
                         let btn = document.getElementById('copy-btn');
                         btn.innerText = "✅ COPIED!";
@@ -174,11 +187,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                             btn.style.background = "#38bdf8";
                         }, 2000);
                     } else {
-                        alert("Tunnel belum siap atau link tidak valid!");
+                        alert("Tunnel belum siap!");
                     }
                 }
 
-                // Jalankan update berkala tiap 2 detik tanpa kedip
                 setInterval(updateStats, 2000);
                 updateStats();
             </script>
