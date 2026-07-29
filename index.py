@@ -11,11 +11,10 @@ LOG_PATH = "/tmp/cloudflared.log"
 STATS_PATH = "/tmp/server_stats.json"
 
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
-    # Log error dibikin pasif biar gak mengebiri server pas ada request masuk
     def log_message(self, format, *args):
         return
 
-    # 🛠️ FITUR MANAGEMENT SSH (ALPINE MODE) 🛠️
+    # 🛠️ FITUR MANAGEMENT SSH (ALPINE MODE)
     def list_ssh(self):
         try:
             users = []
@@ -25,8 +24,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     username = parts[0]
                     uid = int(parts[2])
                     shell = parts[-1]
-                    
-                    # Filter user biasa (UID >= 1000 dan bukan user sistem bawaan)
                     if uid >= 1000 and username not in ["nobody", "alpine"]:
                         users.append({"username": username, "uid": uid, "shell": shell})
             return {"status": "success", "total": len(users), "users": users}
@@ -37,11 +34,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         if not username or not password:
             return {"status": "error", "message": "Username dan password wajib diisi!"}
         try:
-            # Perintah adduser khas Alpine Linux (-D tanpa interaktif)
             cmd_user = f"adduser -D -s /bin/bash {username}"
             subprocess.run(cmd_user, shell=True, check=True)
-            
-            # Suntik password ke user baru
             cmd_pass = f"echo '{username}:{password}' | chpasswd"
             subprocess.run(cmd_pass, shell=True, check=True)
             return {"status": "success", "message": f"User {username} berhasil dibuat!"}
@@ -54,11 +48,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         if not username:
             return {"status": "error", "message": "Username wajib diisi!"}
         try:
-            # Hapus user di Alpine
             cmd_del = f"deluser {username}"
             subprocess.run(cmd_del, shell=True, check=True)
-            
-            # Bersihkan sisa folder home
             subprocess.run(f"rm -rf /home/{username}", shell=True)
             return {"status": "success", "message": f"User {username} berhasil dihapus!"}
         except subprocess.CalledProcessError:
@@ -71,15 +62,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
 
-        # ==========================================
         # 🟢 ROUTER 1: API MANAGEMENT SSH
-        # ==========================================
         if path in ["/api/list", "/api/add", "/api/delete"]:
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            
             response_data = {"status": "error", "message": "Aksi tidak dikenal"}
             
             if path == "/api/list":
@@ -98,9 +86,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 pass
             return
 
-        # ==========================================
         # 🟢 ROUTER 2: API LIVE MONITOR HARDWARE
-        # ==========================================
         if path == "/api/stats":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -131,21 +117,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if hw_info.get("custom_domain"):
                 named_url = "https://" + hw_info["custom_domain"].replace("https://", "").replace("http://", "")
 
-            response_data = {
-                "quick_url": quick_url,
-                "named_url": named_url,
-                "status": status,
-                **hw_info
-            }
+            response_data = {"quick_url": quick_url, "named_url": named_url, "status": status, **hw_info}
             try:
                 self.wfile.write(json.dumps(response_data).encode('utf-8'))
             except Exception:
                 pass
             return
 
-        # ==========================================
-        # 🟢 ROUTER 3: TAMPILAN DASHBOARD HTML UTAMA
-        # ==========================================
+        # 🟢 ROUTER 3: TAMPILAN DASHBOARD HTML UTAMA + TOMBOL SSH MENGGILA
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
@@ -179,13 +158,23 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 .stat-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
                 .stat-value { font-size: 14px; font-weight: bold; color: #f1f5f9; margin-top: 4px; }
 
+                /* 🛠️ STYLE BARU PANEL SSH ACCOUNTS */
+                .ssh-manager { background: #1f2937; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 20px; }
+                .ssh-title { font-size: 13px; font-weight: bold; color: #38bdf8; text-transform: uppercase; margin-bottom: 10px; display: flex; justify-content: space-between; }
+                .input-group { display: flex; gap: 8px; margin-bottom: 10px; }
+                .input-ssh { background: #030712; border: 1px solid #4b5563; padding: 8px 12px; border-radius: 6px; color: #fff; font-size: 13px; width: 100%; }
+                .input-ssh:focus { border-color: #38bdf8; outline: none; }
+                .btn-add { background: #38bdf8; color: #090d16; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px; }
+                .ssh-list { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+                .ssh-list th { text-align: left; padding: 6px; color: #94a3b8; border-bottom: 1px solid #334155; }
+                .ssh-list td { padding: 6px; border-bottom: 1px solid #1f2937; }
+                .btn-del { background: #ef4444; color: white; border: none; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+
                 .url-section { background: #030712; border: 1px solid #38bdf8; padding: 12px; border-radius: 8px; margin-bottom: 12px; text-align: center; }
                 .url-title { font-size: 11px; color: #94a3b8; font-weight: bold; text-transform: uppercase; }
                 .url-box { font-family: monospace; font-size: 13px; word-break: break-all; color: #38bdf8; font-weight: bold; margin: 6px 0; }
                 
-                .btn-copy { 
-                    background: #38bdf8; color: #090d16; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; width: 100%; transition: all 0.2s;
-                }
+                .btn-copy { background: #38bdf8; color: #090d16; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; width: 100%; transition: all 0.2s; }
                 .btn-copy:active { transform: scale(0.98); }
                 .note { font-size: 11px; color: #64748b; text-align: center; line-height: 1.4; margin-top: 10px; }
             </style>
@@ -226,10 +215,39 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         <div class="stat-value" id="ssh" style="font-size:18px; color:#a855f7;">👥 0 Users</div>
                     </div>
                 </div>
+
+                <!-- 🛠️ ELEMENT BARU: PANEL TOMBOL SSH MANAGEMENT -->
+                <div class="ssh-manager">
+                    <div class="ssh-title">
+                        <span>➕ Buat Akun SSH Baru</span>
+                    </div>
+                    <div class="input-group">
+                        <input type="text" id="ssh-user" class="input-ssh" placeholder="Username...">
+                        <input type="password" id="ssh-pass" class="input-ssh" placeholder="Password...">
+                        <button class="btn-add" onclick="createAccount()">ADD</button>
+                    </div>
+                    <div id="ssh-msg" style="font-size: 11px; margin-top: 5px; font-weight: bold;"></div>
+                    
+                    <div class="ssh-title" style="margin-top: 15px; border-top: 1px solid #334155; padding-top: 10px;">
+                        <span>📋 Daftar Akun Terdaftar</span>
+                    </div>
+                    <table class="ssh-list">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Shell Path</th>
+                                <th style="text-align: right;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ssh-table-body">
+                            <tr><td colspan="3" style="text-align:center; color:#64748b;">Loading accounts...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
                 
                 <div class="url-section" style="border-color: #a855f7;">
                     <div class="url-title" style="color: #d8b4fe;">1. Named Tunnel (Domain Utama)</div>
-                    <div class="url-box" id="named-url" style="color: #d8b4fe;">Loading...</div>
+                    <div class="url-box" id="named-url">Loading...</div>
                     <button class="btn-copy" id="btn-copy-named" style="background:#a855f7; color:#fff;" onclick="copyTxt('named-url', 'btn-copy-named')">📋 COPY DOMAIN UTAMA</button>
                 </div>
 
@@ -258,6 +276,70 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     } catch(e) { console.log(e); }
                 }
 
+                async function fetchAccounts() {
+                    try {
+                        let res = await fetch('/api/list');
+                        let data = await res.json();
+                        let tbody = document.getElementById('ssh-table-body');
+                        tbody.innerHTML = "";
+                        
+                        if(data.status === "success" && data.users.length > 0) {
+                            data.users.forEach(u => {
+                                tbody.innerHTML += `
+                                    <tr>
+                                        <td style="font-weight:bold; color:#f1f5f9;">👤 ${u.username}</td>
+                                        <td style="color:#64748b;">${u.shell}</td>
+                                        <td style="text-align: right;"><button class="btn-del" onclick="deleteAccount('${u.username}')">HAPUS</button></td>
+                                    </tr>
+                                `;
+                            });
+                        } else {
+                            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#64748b;">Belum ada akun SSH kustom</td></tr>`;
+                        }
+                    } catch(e) { console.log(e); }
+                }
+
+                async function createAccount() {
+                    let user = document.getElementById('ssh-user').value.trim();
+                    let pass = document.getElementById('ssh-pass').value.trim();
+                    let msg = document.getElementById('ssh-msg');
+                    
+                    if(!user || !pass) {
+                        msg.style.color = "#ef4444";
+                        msg.innerText = "Isi username & password dulu!";
+                        return;
+                    }
+                    
+                    try {
+                        let res = await fetch(`/api/add?user=${user}&pass=${pass}`);
+                        let data = await res.json();
+                        if(data.status === "success") {
+                            msg.style.color = "#4ade80";
+                            msg.innerText = data.message;
+                            document.getElementById('ssh-user').value = "";
+                            document.getElementById('ssh-pass').value = "";
+                            fetchAccounts();
+                        } else {
+                            msg.style.color = "#ef4444";
+                            msg.innerText = data.message;
+                        }
+                    } catch(e) { msg.innerText = "Gagal memproses API"; }
+                }
+
+                async function deleteAccount(username) {
+                    if(confirm(`Hapus akun SSH '${username}'?`)) {
+                        try {
+                            let res = await fetch(`/api/delete?user=${username}`);
+                            let data = await res.json();
+                            if(data.status === "success") {
+                                fetchAccounts();
+                            } else {
+                                alert(data.message);
+                            }
+                        } catch(e) { console.log(e); }
+                    }
+                }
+
                 function copyTxt(elementId, btnId) {
                     let urlText = document.getElementById(elementId).innerText;
                     if(!urlText.includes("Menunggu") && !urlText.includes("Tidak Aktif")) {
@@ -277,6 +359,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
                 setInterval(updateStats, 2000);
                 updateStats();
+                fetchAccounts();
             </script>
         </body>
         </html>
@@ -287,7 +370,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             pass
 
 if __name__ == "__main__":
-    # Mengizinkan reuse port agar tidak macet saat kontainer restart lambat
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("0.0.0.0", PORT), DashboardHandler) as httpd:
         print(f"Dual Tunnel Panel UI running at port {PORT}")
