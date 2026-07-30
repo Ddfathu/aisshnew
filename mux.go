@@ -91,40 +91,40 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 		targetAddr = wsTarget
 		label = "WS-Proxy (Default/Timeout)"
 	} else if peekBytes[0] == TLSHandshakeByte {
-		// Jika diawali dengan byte TLS Handshake, lempar ke Stunnel
+		// 1. JALUR SNI / SSL: Jika terdeteksi TLS Handshake, langsung lempar ke Stunnel (2443)
 		targetAddr = sslTarget
-		label = "SSL/Stunnel"
+		label = "SSL/Stunnel (SNI Traffic)"
 	} else if bytes.HasPrefix(peekBytes, []byte("SSH-")) {
-		// Jika menggunakan Raw SSH biasa (Langsung tembak dari Termux/Bitvise tanpa payload)
+		// 2. JALUR RAW SSH: Jika langsung nembak SSH biasa (Direct tanpa payload)
 		targetAddr = "127.0.0.1:22"
 		label = "Raw OpenSSH (Port 22)"
-	} else {
-		// --- SMART INTELLIGENT ROUTER UNTUK PAYLOAD & HTTP ---
-		// Kita intip buffer yang agak besar (1024 byte) untuk memastikan HTTP Header sudah terbaca sepenuhnya
+	} else if isHTTPMethod(peekBytes) {
+		// 3. JALUR HTTP / SSH PAYLOAD VVPN (DarkTunnel, HTTP Custom, dll)
+		// Jika diawali teks HTTP Method (GET, POST, CONN, MKCO), amankan rutenya.
+		
 		maxPeek := 1024
 		if reader.Buffered() > maxPeek {
 			maxPeek = reader.Buffered()
 		}
-		
 		bufferedBytes, _ := reader.Peek(maxPeek)
 		
 		if bytes.Contains(bufferedBytes, []byte("dfathu.web.id")) || bytes.Contains(bufferedBytes, []byte("GET /api/")) {
-			// Jika request dari browser biasa atau API log web
+			// Jalur khusus untuk Web UI Python Dashboard kamu
 			targetAddr = "127.0.0.1:8081"
-			label = "Web UI Python (Argo Host Route)"
+			label = "Web UI Python"
 		} else if bytes.Contains(bufferedBytes, []byte("7300")) || bytes.Contains(bufferedBytes, []byte("badvpn")) || bytes.Contains(bufferedBytes, []byte("UDPGW")) {
 			// Deteksi Game Mode BadVPN UDPGW
 			targetAddr = udpgwTarget
 			label = "BadVPN-UDPGW (Game Mode)"
-		} else if bytes.Contains(bufferedBytes, []byte("Upgrade: websocket")) || bytes.Contains(bufferedBytes, []byte("Connection: Upgrade")) {
-			// Deteksi SSH over WebSocket murni
-			targetAddr = wsTarget
-			label = "WS-Proxy (Websocket Upgrade)"
 		} else {
-			// Tampungan terakhir untuk HTTP Payload kustom (HTTP Custom, DarkTunnel, dll)
+			// SANGAT PENTING: Semua sisa Payload VPN / Trik Split otomatis dipaksa masuk ke WS Proxy (8880)
 			targetAddr = wsTarget
-			label = "WS-Proxy (HTTP Payload)"
+			label = "WS-Proxy (SSH Payload/Split)"
 		}
+	} else {
+		// Tampungan terakhir jika data tidak dikenal
+		targetAddr = wsTarget
+		label = "WS-Proxy (Unknown Plaintext)"
 	}
 
 	log.Printf("[Mux] Koneksi dari %s dialihkan ke %s (%s)", client.RemoteAddr(), label, targetAddr)
@@ -154,4 +154,18 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 
 	// Tunggu sampai salah satu koneksi selesai/terputus
 	<-done
+}
+
+// Fungsi pembantu untuk mendeteksi apakah data awal berbentuk HTTP Method (Payload)
+func isHTTPMethod(b []byte) bool {
+	methods := [][]byte{
+		[]byte("GET"), []byte("POST"), []byte("CONN"), 
+		[]byte("HEAD"), []byte("PUT"), []byte("MKCO"),
+	}
+	for _, m := range methods {
+		if bytes.HasPrefix(b, m) {
+			return true
+		}
+	}
+	return false
 }
