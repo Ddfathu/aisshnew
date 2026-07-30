@@ -64,21 +64,16 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 
 	reader := bufio.NewReaderSize(client, 65536)
 
-	// Batasi waktu ngintip byte pertama (Anti-Stuck / Anti-Sunek)
-	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
-	
-	// Intip hingga 4 byte untuk mendeteksi tipe traffic
+	// 🔥 FIX: Hapus batas waktu 3 detik di sini agar jabat tangan awal via proxy Railway tidak terputus di jalan
 	peekBytes, err := reader.Peek(4)
-	
-	_ = client.SetReadDeadline(time.Time{}) // Reset deadline ke normal
 
 	var targetAddr string
 	var label string
 
-	// FIX: Cek error ATAU pastikan data yang diintip tidak kosong untuk menghindari crash
+	// Proteksi anti crash tetap aktif jika data kosong / koneksi bermasalah
 	if err != nil || len(peekBytes) == 0 {
 		targetAddr = wsTarget
-		label = "WS-Proxy (Timeout/Empty)"
+		label = "WS-Proxy (Error/Empty)"
 	} else if peekBytes[0] == TLSHandshakeByte {
 		// 1. JALUR SNI / SSL: Jika terdeteksi TLS Handshake, lempar ke Stunnel (2443)
 		targetAddr = sslTarget
