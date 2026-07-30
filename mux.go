@@ -67,7 +67,7 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 	// Batasi waktu ngintip byte pertama (Anti-Stuck / Anti-Sunek)
 	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
 	
-	// Intip 4 byte pertama saja untuk penentuan jalur utama
+	// Intip hingga 4 byte untuk mendeteksi tipe traffic
 	peekBytes, err := reader.Peek(4)
 	
 	_ = client.SetReadDeadline(time.Time{}) // Reset deadline ke normal
@@ -75,7 +75,8 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 	var targetAddr string
 	var label string
 
-	if err != nil {
+	// FIX: Cek error ATAU pastikan data yang diintip tidak kosong untuk menghindari crash
+	if err != nil || len(peekBytes) == 0 {
 		targetAddr = wsTarget
 		label = "WS-Proxy (Timeout/Empty)"
 	} else if peekBytes[0] == TLSHandshakeByte {
@@ -87,8 +88,7 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 		targetAddr = "127.0.0.1:22"
 		label = "Raw OpenSSH (Port 22)"
 	} else {
-		// 3. JALUR PAYLOAD / SISA TRAFFIC: Apapun isi payload-nya (GET, [split], dll)
-		// langsung hajar masuk ke port 8880 tanpa ribet disaring lagi!
+		// 3. JALUR PAYLOAD / SISA TRAFFIC: Langsung hajar masuk ke port 8880 (ws-proxy)
 		targetAddr = wsTarget
 		label = "WS-Proxy / Payload Backend"
 	}
@@ -106,7 +106,7 @@ func handleClient(client net.Conn, sslTarget, wsTarget string) {
 
 	done := make(chan struct{}, 2)
 	
-	// Alirkan data dari buffer reader (termasuk data yang di-peek) ke backend
+	// Alirkan data dari buffer reader ke backend
 	go func() {
 		_, _ = io.Copy(backendConn, reader) 
 		done <- struct{}{}
