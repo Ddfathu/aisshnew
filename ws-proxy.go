@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -42,9 +43,11 @@ func main() {
 
 func tweakSocket(conn net.Conn) {
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)                  // Matikan Nagle Algorithm (Anti-delay)
-		_ = tcpConn.SetKeepAlive(true)                 // Aktifkan TCP Keepalive
+		_ = tcpConn.SetNoDelay(true)                     // Matikan Nagle Algorithm (Anti-delay)
+		_ = tcpConn.SetKeepAlive(true)                   // Aktifkan TCP Keepalive
 		_ = tcpConn.SetKeepAlivePeriod(10 * time.Second) // Cek berkala setiap 10 detik
+		_ = tcpConn.SetReadBuffer(BufferSize)
+		_ = tcpConn.SetWriteBuffer(BufferSize)
 	}
 }
 
@@ -52,9 +55,14 @@ func handleWS(client net.Conn, sshTarget string) {
 	tweakSocket(client)
 	defer client.Close()
 
-	// Baca HTTP Header (Maksimal 4096 byte agar kebal payload jumbo)
-	headerBuf := make([]byte, 4096)
+	// Baca header lebih fleksibel, jangan patok batas 4096 mati
+	headerBuf := make([]byte, BufferSize) 
+	
+	// Set timeout pembacaan header agar tidak digantung koneksi hantu
+	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
 	n, err := client.Read(headerBuf)
+	_ = client.SetReadDeadline(time.Time{}) // Kembalikan ke normal
+	
 	if err != nil || n == 0 {
 		return
 	}
@@ -62,7 +70,7 @@ func handleWS(client net.Conn, sshTarget string) {
 	rawHeaders := string(headerBuf[:n])
 	rawLower := strings.ToLower(rawHeaders)
 
-	// Proses jabat tangan (handshake) WebSocket
+	// Proses jabat tangan WebSocket dengan lebih tangguh
 	if strings.Contains(rawLower, "upgrade: websocket") || strings.Contains(rawLower, "websocket") {
 		wsKey := ""
 		lines := strings.Split(rawHeaders, "\r\n")
@@ -97,7 +105,7 @@ func handleWS(client net.Conn, sshTarget string) {
 		_, _ = client.Write([]byte(defaultResp))
 	}
 
-	// Hubungkan ke Dropbear/OpenSSH Backend
+	// Hubungkan ke OpenSSH Backend
 	sshConn, err := net.DialTimeout("tcp", sshTarget, 5*time.Second)
 	if err != nil {
 		return
@@ -107,11 +115,14 @@ func handleWS(client net.Conn, sshTarget string) {
 
 	done := make(chan struct{}, 2)
 
-	// --- FIX DROPBEAR FILTER: ANTI-SAMPAH PAYLOAD JUMBO MULTI-CHUNK & ANTI-DC ---
+	// --- FIX FILTER: SLIDING BUFFER ANTI "SSH" TERPOTONG ---
 	go func() {
 		defer func() { done <- struct{}{} }()
 		buffer := make([]byte, BufferSize)
 		filtering := true
+		
+		// Kita simpan sisaan byte dari putaran sebelumnya ke sini
+		var leftOver []byte 
 		var totalRead int
 
 		for {
@@ -121,28 +132,45 @@ func handleWS(client net.Conn, sshTarget string) {
 				totalRead += n
 
 				if filtering {
-					// 1. Cari banner SSH di dalam data stream saat ini
-					if idx := bytes.Index(data, []byte("SSH-")); idx != -1 {
-						data = data[idx:]
-						filtering = false // Banner ketemu! Matikan filter untuk seterusnya
-					} else if totalRead > 4096 {
-						// 2. Bypass jika sudah lewat 4KB (Proteksi Speedtest Upload)
-						// Jika sudah 4KB sampah lewat dan tidak ada SSH-, anggap ini data tunnel murni
-						filtering = false
-					} else {
-						// 3. Masih di bawah 4KB dan banner belum ketemu? 
-						// Artinya chunk ini full sampah payload, buang dan lanjut baca chunk berikutnya.
-						if err != nil {
+					// Gabungkan sisaan putaran lalu dengan data baru
+					combined := append(leftOver, data...)
+					
+					if idx := bytes.Index(combined, []byte("SSH-")); idx != -1 {
+						// Banner SSH Ketemu! Buang semua sampah di kirinya (idx)
+						cleanData := combined[idx:]
+						
+						_, wErr := sshConn.Write(cleanData)
+						if wErr != nil {
 							return
 						}
-						continue
+						
+						filtering = false // Matikan filter
+						leftOver = nil    // Kosongkan memori leftover
+						
+					} else if totalRead > 4096 {
+						// Jika sudah baca > 4KB dan banner nggak ada, anggap ini speedtest atau direct mode
+						_, wErr := sshConn.Write(combined)
+						if wErr != nil {
+							return
+						}
+						filtering = false
+						leftOver = nil
+					} else {
+						// Banner belum ketemu, tapi kita harus waspada siapa tau kata "SSH-" terpotong 
+						// (misal cuma "SS" di akhir combined). 
+						// Kita simpan 3 byte terakhir dari gabungan saat ini ke putaran selanjutnya.
+						if len(combined) > 3 {
+							leftOver = combined[len(combined)-3:]
+						} else {
+							leftOver = combined
+						}
 					}
-				}
-				
-				// Kirim data yang sudah bersih (atau data bypass) ke SSH
-				_, wErr := sshConn.Write(data)
-				if wErr != nil {
-					return
+				} else {
+					// Jika sudah nggak filtering (Mode murni)
+					_, wErr := sshConn.Write(data)
+					if wErr != nil {
+						return
+					}
 				}
 			}
 			if err != nil {
@@ -151,22 +179,10 @@ func handleWS(client net.Conn, sshTarget string) {
 		}
 	}()
 
-	// Pipe arah sebaliknya (SSH/Dropbear -> Client) - Full Loss tanpa filter
+	// Pipe arah sebaliknya (SSH/Dropbear -> Client) - Gunakan io.Copy untuk efisiensi RAM penuh
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buffer := make([]byte, BufferSize)
-		for {
-			n, err := sshConn.Read(buffer)
-			if n > 0 {
-				_, wErr := client.Write(buffer[:n])
-				if wErr != nil {
-					return
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
+		_, _ = io.Copy(client, sshConn)
 	}()
 
 	<-done
