@@ -31,7 +31,6 @@ func main() {
 		wsTarget = "127.0.0.1:8880"
 	}
 
-	// 🛠️ JALUR KUNCI BARU: Ambil konfigurasi port BadVPN UDPGW dari entrypoint.sh
 	udpgwHost := os.Getenv("UDPGW_TARGET_HOST")
 	udpgwPort := os.Getenv("UDPGW_TARGET_PORT")
 	if udpgwHost == "" {
@@ -55,7 +54,6 @@ func main() {
 		if err != nil {
 			continue
 		}
-		// Kirim target udpgwTarget ke handlerna
 		go handleClient(clientConn, sslTarget, wsTarget, udpgwTarget)
 	}
 }
@@ -74,54 +72,64 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 	tweakSocket(client)
 	defer client.Close()
 
-	// --- OPTIMASI BUFFER: Diperbesar jadi 64KB ---
+	// Buffer pembaca dinaikkan ke 64KB untuk stabilitas traffic tinggi
 	reader := bufio.NewReaderSize(client, 65536)
 
 	// Batasi waktu ngintip byte pertama (Anti-Stuck / Anti-Sunek)
 	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
 	
-	// 🔥 DIUBAH: Intip 4 byte pertama sekaligus biar kebaca string "SSH-" dari Termux
+	// Intip 4 byte pertama untuk deteksi protokol dasar
 	peekBytes, err := reader.Peek(4)
 	
-	// Reset kembali deadline ke normal agar koneksi tidak terputus setelah 3 detik
+	// Reset kembali deadline ke normal agar koneksi tidak putus di tengah jalan
 	_ = client.SetReadDeadline(time.Time{})
 
 	var targetAddr string
 	var label string
 
-	// Deteksi protokol berdasarkan byte pertama dan isi intipan buffer teks
 	if err != nil {
 		targetAddr = wsTarget
 		label = "WS-Proxy (Default/Timeout)"
 	} else if peekBytes[0] == TLSHandshakeByte {
+		// Jika diawali dengan byte TLS Handshake, lempar ke Stunnel
 		targetAddr = sslTarget
 		label = "SSL/Stunnel"
 	} else if bytes.HasPrefix(peekBytes, []byte("SSH-")) {
-		// 🔥 BYPASS JALUR RAW SSH: Jika Termux nembak SSH biasa, bypass langsung ke OpenSSH lokal port 22
+		// Jika menggunakan Raw SSH biasa (Langsung tembak dari Termux/Bitvise tanpa payload)
 		targetAddr = "127.0.0.1:22"
 		label = "Raw OpenSSH (Port 22)"
 	} else {
-		// 🛠️ SMART INTELLIGENT ROUTER UNTUK BROWSER & PAYLOAD
-		bufferedBytes, peekErr := reader.Peek(reader.Buffered())
+		// --- SMART INTELLIGENT ROUTER UNTUK PAYLOAD & HTTP ---
+		// Kita intip buffer yang agak besar (1024 byte) untuk memastikan HTTP Header sudah terbaca sepenuhnya
+		maxPeek := 1024
+		if reader.Buffered() > maxPeek {
+			maxPeek = reader.Buffered()
+		}
 		
-		// Cek apakah request HTTP membawa header domain kustom lu ATAU menembak API log
-		if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("dfathu.web.id")) || bytes.Contains(bufferedBytes, []byte("GET /api/"))) {
-			// Belokkan request browser biasa langsung ke port Web server Python internal port 8081
+		bufferedBytes, _ := reader.Peek(maxPeek)
+		
+		if bytes.Contains(bufferedBytes, []byte("dfathu.web.id")) || bytes.Contains(bufferedBytes, []byte("GET /api/")) {
+			// Jika request dari browser biasa atau API log web
 			targetAddr = "127.0.0.1:8081"
 			label = "Web UI Python (Argo Host Route)"
-		} else if peekErr == nil && (bytes.Contains(bufferedBytes, []byte("7300")) || bytes.Contains(bufferedBytes, []byte("badvpn")) || bytes.Contains(bufferedBytes, []byte("UDPGW"))) {
-			// 🛠️ SMART DETECTOR UNTUK GAME / UDPGW
+		} else if bytes.Contains(bufferedBytes, []byte("7300")) || bytes.Contains(bufferedBytes, []byte("badvpn")) || bytes.Contains(bufferedBytes, []byte("UDPGW")) {
+			// Deteksi Game Mode BadVPN UDPGW
 			targetAddr = udpgwTarget
 			label = "BadVPN-UDPGW (Game Mode)"
-		} else {
-			// Payload DarkTunnel / HTTP Custom (GET / polos tanpa domain kustom) otomatis aman lolos ke sini!
+		} else if bytes.Contains(bufferedBytes, []byte("Upgrade: websocket")) || bytes.Contains(bufferedBytes, []byte("Connection: Upgrade")) {
+			// Deteksi SSH over WebSocket murni
 			targetAddr = wsTarget
-			label = "WS-Proxy"
+			label = "WS-Proxy (Websocket Upgrade)"
+		} else {
+			// Tampungan terakhir untuk HTTP Payload kustom (HTTP Custom, DarkTunnel, dll)
+			targetAddr = wsTarget
+			label = "WS-Proxy (HTTP Payload)"
 		}
 	}
 
 	log.Printf("[Mux] Koneksi dari %s dialihkan ke %s (%s)", client.RemoteAddr(), label, targetAddr)
 
+	// Hubungkan ke backend target
 	backendConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
 	if err != nil {
 		log.Printf("[Mux] Gagal konek ke backend %s: %v", label, err)
@@ -132,17 +140,18 @@ func handleClient(client net.Conn, sslTarget, wsTarget, udpgwTarget string) {
 
 	done := make(chan struct{}, 2)
 	
-	// Alirkan data dari buffer reader ke backend secara loss
+	// Alirkan data dari buffer reader (termasuk data yang di-peek) ke backend
 	go func() {
 		_, _ = io.Copy(backendConn, reader) 
 		done <- struct{}{}
 	}()
 	
-	// Alirkan data dari backend balik ke client
+	// Alirkan data balik dari backend ke client
 	go func() {
 		_, _ = io.Copy(client, backendConn)
 		done <- struct{}{}
 	}()
 
+	// Tunggu sampai salah satu koneksi selesai/terputus
 	<-done
 }
