@@ -122,19 +122,19 @@ stunnel /etc/stunnel/stunnel.conf &
 
 # --- 🔥 PUSAT EKSEKUSI DOUBLE TUNNEL FIXED 🔥 ---
 
-# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway (LOG BELOK KE /tmp/named_tunnel.log)
+# 1. Jalankan Named Tunnel HANYA JIKA token diisi di Railway
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
     echo "[*] Menjalankan Cloudflare Named Tunnel (Mode Dinamis via Dashboard)..."
     cloudflared tunnel run --protocol http2 --token "$CF_TUNNEL_TOKEN" > $LOG_NAMED 2>&1 &
 fi
 
-# 2. Quick Tunnel DIUBAH MENEMBAK KE PUBLIC_PORT (8080 Muxer) Agar data diolah Muxer Golang
-echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak)..."
-cloudflared tunnel --url "http://127.0.0.1:$PUBLIC_PORT" --protocol http2 > $LOG_CF 2>&1 &
+# 2. 🔥 PERBAIKAN UTAMA: Mengubah http:// menjadi tcp:// agar SSL/SNI lolos bersih ke Muxer Go
+echo "[*] Menjalankan Cloudflare Quick Tunnel (Link Acak TCP Mode)..."
+cloudflared tunnel --url "tcp://127.0.0.1:$PUBLIC_PORT" --protocol http2 > $LOG_CF 2>&1 &
 
 # =================================================================
 
-# --- TAMBAHAN UTAMA: BADVPN UDPGW UNTUK MENDUKUNG TRAFIK UDP / GAME ---
+# --- BADVPN UDPGW UNTUK MENDUKUNG TRAFIK UDP / GAME ---
 if [ -f /usr/local/bin/badvpn-udpgw ]; then
     echo "[*] Memulai BadVPN udpgw di Port Lokal 7300..."
     /usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 500 --max-connections-for-client 20 &
@@ -180,7 +180,7 @@ EOF
     done
 ) &
 
-# --- 🛠️ FIX LOGIKA YANG HILANG: SIAPKAN FOLDER & JALANKAN WEB UI DASHBOARD ---
+# --- SIAPKAN FOLDER & JALANKAN WEB UI DASHBOARD ---
 echo "[*] Menyiapkan lingkungan Web UI..."
 mkdir -p /app
 
